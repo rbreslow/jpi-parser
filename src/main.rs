@@ -1,8 +1,13 @@
 use nom::{Err, IResult, Parser};
+use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, take, take_until};
+use nom::character::complete::{digit1, space0};
+use nom::combinator::{eof};
 use nom::error::{Error, ErrorKind};
+use nom::sequence::{pair, preceded, terminated};
+use nom::character::complete;
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, Eq, PartialEq)]
  struct ConfiguredLimits {
      volts_hi_times_ten: u16,
      volts_lo_times_ten: u16,
@@ -76,16 +81,27 @@ use nom::error::{Error, ErrorKind};
  }
 
  fn configured_limits_parser(i: &str) -> IResult<&str, ConfiguredLimits> {
-     Ok((i, ConfiguredLimits {
-         volts_hi_times_ten: 0,
-         volts_lo_times_ten: 0,
-         dif: 0,
-         cht: 0,
-         cld: 0,
-         tit: 0,
-         oil_hi: 0,
-         oil_lo: 0
-     }))
+     let mut element = terminated(preceded(space0, complete::u16), pair(space0, alt((tag(","), eof))));
+
+     let mut i = i;
+     let mut next = || -> IResult<&str, u16> {
+         let (rem, num) = element(i)?;
+         i = rem;
+         Ok((i, num))
+     };
+
+     let limits = ConfiguredLimits {
+         volts_hi_times_ten: next()?.1,
+         volts_lo_times_ten: next()?.1,
+         dif: next()?.1,
+         cht: next()?.1,
+         cld: next()?.1,
+         tit: next()?.1,
+         oil_hi: next()?.1,
+         oil_lo: next()?.1
+     };
+
+     Ok((i, limits))
  }
 
  fn header_record_parser(i: &str) -> IResult<&str, (&str, &str)> {
@@ -114,9 +130,22 @@ use nom::error::{Error, ErrorKind};
      assert_eq!(not_underscore("__N51SW"), Err(nom::Err::Error(nom::error::Error::new("__N51SW", ErrorKind::IsNot))));
 
      assert_eq!(tail_number_parser("U,N51SW__"), Ok(("__", ("U", "N51SW"))));
+
+     assert_eq!(configured_limits_parser("155,130,400,415, 60,1650,220, 75"), Ok(("", ConfiguredLimits {
+         volts_hi_times_ten: 155,
+         volts_lo_times_ten: 130,
+         dif: 400,
+         cht: 415,
+         cld: 60,
+         tit: 1650,
+         oil_hi: 220,
+         oil_lo: 75
+     })))
  }
 
 fn main() {
     let raw: &str = "$U,N51SW__*37";
     println!("{:?}", header_record_parser(raw));
+
+    println!("{:?}", configured_limits_parser("155,130,400,415, 60,1650,220, 75"));
 }
