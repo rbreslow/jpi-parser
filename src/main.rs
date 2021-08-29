@@ -1,9 +1,9 @@
-use nom::{Err, IResult, Parser};
+use nom::{IResult};
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, take, take_until};
-use nom::character::complete::{digit1, space0};
+use nom::character::complete::{space0};
 use nom::combinator::{eof};
-use nom::error::{Error, ErrorKind};
+use nom::error::{ErrorKind};
 use nom::sequence::{pair, delimited};
 use nom::character::complete;
 
