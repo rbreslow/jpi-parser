@@ -4,7 +4,7 @@ use nom::bytes::complete::{is_not, tag, take, take_until};
 use nom::character::complete::{digit1, space0};
 use nom::combinator::{eof};
 use nom::error::{Error, ErrorKind};
-use nom::sequence::{pair, preceded, terminated};
+use nom::sequence::{pair, delimited};
 use nom::character::complete;
 
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
@@ -81,7 +81,11 @@ use nom::character::complete;
  }
 
  fn configured_limits_parser(i: &str) -> IResult<&str, ConfiguredLimits> {
-     let mut element = terminated(preceded(space0, complete::u16), pair(space0, alt((tag(","), eof))));
+     let mut element = delimited(
+         space0, // possible spaces to the left
+         complete::u16, // the number
+         pair(space0, alt((tag(","), eof))) // possible spaces to the right followed by a comma or end of the string
+     );
 
      let mut i = i;
      let mut next = || -> IResult<&str, u16> {
