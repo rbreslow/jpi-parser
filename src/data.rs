@@ -76,14 +76,14 @@ fn read_data_header(reader: &mut BufReader<File>) -> io::Result<data_header> {
     })
 }
 
-fn read_next_data(reader: &mut BufReader<File>) -> io::Result<data_record> {
+fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<[u16; 48]> {
     let header = read_data_header(reader)?;
     if header.repeatcount != 0 {
-        unimplemented!()
+        return Ok(*prev);
     }
-    const MAX_FLAG_BYTES: usize = 14;
-    let num_field_flags = (header.decodeflags[0] & 0x3F).count_ones() as usize;
-    let num_scale_flags = ((header.decodeflags[0] & 0xC0) >> 6).count_ones() as usize;
+    const MAX_FLAG_BYTES: usize = 14; // 6 + 2 + 6
+    let num_field_flags = (header.decodeflags[0] & 0x3F).count_ones() as usize; // never greater than 6
+    let num_scale_flags = ((header.decodeflags[0] & 0xC0) >> 6).count_ones() as usize; // never greater than 2
     let mut flag_buffer = [0u8; MAX_FLAG_BYTES];
     reader.read_exact(&mut flag_buffer[0..(num_field_flags * 2 + num_scale_flags)])?;
 
@@ -94,6 +94,43 @@ fn read_next_data(reader: &mut BufReader<File>) -> io::Result<data_record> {
     offset += num_scale_flags;
     let sign_flags = &flag_buffer[offset..num_field_flags];
 
+    let num_fields = field_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
+    let mut field_dif_buffer = [0u8; 48]; // num_fields is how much of this buffer is actually used
+    reader.read_exact( &mut field_dif_buffer[0usize..num_fields])?;
 
+    let num_scale = scale_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
+    let mut scale_dif_buffer = [0u8; 16];
+    reader.read_exact(&mut scale_dif_buffer[0usize..num_scale]);
+
+    let mut out = *prev;
+    let mut dif_buffer_idx = 0usize; // index to field_dif_buffer scale_dif_buffer
+    for i in 0..6 { // apply field dif
+        for bit in 0..8 {
+            if ((field_flags[i] >> bit) & 1) != 0 {
+                let mut diff = 0u16;
+                if i < 2 {
+                    if ((scale_flags[i] >> bit) & 1) != 0 {
+                        diff = (scale_dif_buffer[dif_buffer_idx] as u16) << 8; // set high order byte
+                    }
+                }
+
+                let sign: bool = ((sign_flags[i] >> bit) & 1) != 0;
+                let idx = (i * 8) + bit;
+                diff |= field_dif_buffer[dif_buffer_idx] as u16; // set low byte
+                if sign {
+                    out[idx] -= diff;
+                } else {
+                    out[idx] += diff;
+                }
+
+                dif_buffer_idx += 1;
+            }
+        }
+    }
+    let mut checksum = [0u8; 1];
+    reader.read_exact(&mut checksum)?;
+    // TODO: validate checksum (not explained in document but is probably just xor)
+
+    Ok(out)
 }
 
