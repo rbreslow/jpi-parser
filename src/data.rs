@@ -3,10 +3,13 @@ use std::io;
 use std::fs::{File, read};
 use std::mem::size_of;
 use std::error::Error;
+use nom::error::ParseError;
 
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+#[repr(packed)]
 pub struct flightheader {
     flightnumber: u16,
-    flags: u64,
+    flags: u32,
     unknown: u16,
     interval_secs: u16,
     datebits: u16,
@@ -14,46 +17,47 @@ pub struct flightheader {
 }
 
 // TODO: work with more than 6 cylinders
-struct data_record {
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct data_record {
     // first byte of flags
-    egt: [u16; 6],
-    t1: u16,
-    t2: u16,
+    pub egt: [u16; 6],
+    pub t1: u16,
+    pub t2: u16,
 
     // second byte of flags
-    cht: [u16; 6],
-    cld: u16,
-    oil: u16,
+    pub cht: [u16; 6],
+    pub cld: u16,
+    pub oil: u16,
 
     // third byte of flags
-    mark: u16,
-    unk_3_1: u16,
-    cdt: u16,
-    iat: u16,
-    bat: u16,
-    oat: u16,
-    usd: u16,
-    ff: u16,
+    pub mark: u16,
+    pub unk_3_1: u16,
+    pub cdt: u16,
+    pub iat: u16,
+    pub bat: u16,
+    pub oat: u16,
+    pub usd: u16,
+    pub ff: u16,
 
     // fourth byte of flags
-    regt: [u16; 6],
-    hp_rt1: u16, // hp/rt1 union
-    rt2: u16,
+    pub regt: [u16; 6],
+    pub hp_rt1: u16, // hp/rt1 union
+    pub rt2: u16,
 
     // fifth byte of flags
-    rcht: [u16; 6],
-    rcld: u16,
-    roil: u16,
+    pub rcht: [u16; 6],
+    pub rcld: u16,
+    pub roil: u16,
 
     // sixth byte of flags
-    map: u16,
-    rpm: u16,
-    rpm_highbyte_rcdt: u16, // rpm_highbyte/rcdt union
-    riat: u16,
-    unk_6_4: u16,
-    unk_6_5: u16,
-    rusd: u16,
-    rff: u16
+    pub map: u16,
+    pub rpm: u16,
+    pub rpm_highbyte_rcdt: u16, // rpm_highbyte/rcdt union
+    pub riat: u16,
+    pub unk_6_4: u16,
+    pub unk_6_5: u16,
+    pub rusd: u16,
+    pub rff: u16
 }
 
 // every binary record begins with this and this tells how many flag bytes to read
@@ -65,9 +69,48 @@ struct data_header {
     repeatcount: u8,
 }
 
+fn be_u16_uwu(slice: &[u8]) -> u16 {
+    ((slice[0] as u16) << 8) | slice[1] as u16
+}
+
+fn be_u32_uwu(slice: &[u8]) -> u32 {
+    ((slice[0] as u32) << (8 * 3)) |
+    ((slice[1] as u32) << (8 * 2)) |
+    ((slice[2] as u32) << (8 * 1)) |
+    ((slice[3] as u32))
+}
+
+
+pub fn read_flight_header(reader: &mut BufReader<File>) -> io::Result<flightheader> {
+    let mut buf = [0u8; size_of::<flightheader>()];
+    reader.read_exact(&mut buf)?;
+
+    let mut i = 0usize;
+    let flightnumber = be_u16_uwu(&buf[i..]);
+    i += 2;
+    let flags = be_u32_uwu(&buf[i..]);
+    i += 4;
+    let unknown = be_u16_uwu(&buf[i..]);
+    i += 2;
+    let interval_secs = be_u16_uwu(&buf[i..]);
+    i += 2;
+    let datebits = be_u16_uwu(&buf[i..]);
+    i += 2;
+    let timebits = be_u16_uwu(&buf[i..]);
+    i += 2;
+
+    Ok(flightheader {
+        flightnumber,
+        flags,
+        unknown,
+        interval_secs,
+        datebits,
+        timebits
+    })
+}
+
 fn read_data_header(reader: &mut BufReader<File>) -> io::Result<data_header> {
-    const SIZE: usize = size_of::<data_header>();
-    let mut header_bytes = [0u8; SIZE];
+    let mut header_bytes = [0u8; size_of::<data_header>()];
     reader.read_exact(&mut header_bytes)?;
 
     Ok(data_header {
@@ -76,7 +119,7 @@ fn read_data_header(reader: &mut BufReader<File>) -> io::Result<data_header> {
     })
 }
 
-fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<[u16; 48]> {
+pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<[u16; 48]> {
     let header = read_data_header(reader)?;
     if header.repeatcount != 0 {
         return Ok(*prev);
@@ -92,7 +135,7 @@ fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<
     offset += num_field_flags;
     let scale_flags = &flag_buffer[offset..offset+num_scale_flags];
     offset += num_scale_flags;
-    let sign_flags = &flag_buffer[offset..num_field_flags];
+    let sign_flags = &flag_buffer[offset..offset+num_field_flags];
 
     let num_fields = field_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
     let mut field_dif_buffer = [0u8; 48]; // num_fields is how much of this buffer is actually used
@@ -100,15 +143,16 @@ fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<
 
     let num_scale = scale_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
     let mut scale_dif_buffer = [0u8; 16];
-    reader.read_exact(&mut scale_dif_buffer[0usize..num_scale]);
+    reader.read_exact(&mut scale_dif_buffer[0usize..num_scale])?;
 
     let mut out = *prev;
     let mut dif_buffer_idx = 0usize; // index to field_dif_buffer scale_dif_buffer
-    for i in 0..6 { // apply field dif
-        for bit in 0..8 {
+    for i in 0..num_field_flags { // apply field dif
+        for bit in 0..8 { // this can be optimized with leading_zeros
+            //let mut flag = field_flags[i];
             if ((field_flags[i] >> bit) & 1) != 0 {
                 let mut diff = 0u16;
-                if i < 2 {
+                if i < num_scale_flags {
                     if ((scale_flags[i] >> bit) & 1) != 0 {
                         diff = (scale_dif_buffer[dif_buffer_idx] as u16) << 8; // set high order byte
                     }

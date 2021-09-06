@@ -5,7 +5,8 @@ use headers::*;
 use data::*;
 use nom::error::ErrorKind;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, BufRead, Seek};
+use std::mem::size_of;
 
 
 #[test]
@@ -73,7 +74,28 @@ use std::io::{BufReader, Read};
 
 fn main() {
     let raw: &str = "$U,N51SW__*37";
-    println!("{:?}", header_record_parser(raw));
+    //println!("{:?}", header_record_parser(raw));
 
-    println!("{:?}", configured_limits_parser("155,130,400,415, 60,1650,220, 75"));
+    //println!("{:?}", configured_limits_parser("155,130,400,415, 60,1650,220, 75"));
+
+    let f = File::open("U210818.JPI").unwrap();
+    let mut reader = BufReader::new(f);
+    for _ in 0..20 {
+        let mut str = String::new();
+        reader.read_line(&mut str);
+        //print!("{}", str);
+    }
+
+    println!("position {}", reader.stream_position().unwrap());
+    let header = read_flight_header(&mut reader);
+    println!("{:?}", &header);
+    println!("position {}", reader.stream_position().unwrap());
+    println!("sizeof flightheader {}", size_of::<flightheader>());
+    reader.seek_relative(1i64).unwrap(); // probably checksum
+
+    let init = [0xF0; 48];
+    let res = read_next_data(&init, &mut reader);
+    let data = res.unwrap();
+    let uwu: data_record = unsafe { std::ptr::read(data.as_ptr() as *const _) };
+    println!("{:?}", &uwu);
 }
