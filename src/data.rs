@@ -174,9 +174,9 @@ pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Res
                 let idx = (i * 8) + bit;
                 diff |= field_dif_buffer[dif_buffer_idx] as u16; // set low byte
                 if sign {
-                    out[idx] -= diff;
+                    out[idx] = out[idx].overflowing_sub(diff).0;
                 } else {
-                    out[idx] += diff;
+                    out[idx] = out[idx].overflowing_add(diff).0;
                 }
 
                 dif_buffer_idx += 1;
