@@ -80,9 +80,17 @@ fn be_u32_uwu(slice: &[u8]) -> u32 {
     ((slice[3] as u32))
 }
 
+fn calc_new_checksum(data: &[u8]) -> u8 {
+    let sum: u8 = data.iter().fold(0u8, |acc, x| acc.overflowing_add(*x).0);
+    (-(sum as i8)) as u8
+}
+
+fn calc_checksum(data: &[u8]) -> u8 {
+    return calc_new_checksum(data);
+}
 
 pub fn read_flight_header(reader: &mut BufReader<File>) -> io::Result<flightheader> {
-    let mut buf = [0u8; size_of::<flightheader>()];
+    let mut buf = [0u8; size_of::<flightheader>() + 1];
     reader.read_exact(&mut buf)?;
 
     let mut i = 0usize;
@@ -98,6 +106,9 @@ pub fn read_flight_header(reader: &mut BufReader<File>) -> io::Result<flighthead
     i += 2;
     let timebits = be_u16_uwu(&buf[i..]);
     i += 2;
+    let checksum = buf[i];
+    let computed = calc_checksum(&buf[..size_of::<flightheader>()]);
+    assert_eq!(checksum, computed);
 
     Ok(flightheader {
         flightnumber,
@@ -109,18 +120,18 @@ pub fn read_flight_header(reader: &mut BufReader<File>) -> io::Result<flighthead
     })
 }
 
-fn read_data_header(reader: &mut BufReader<File>) -> io::Result<data_header> {
+fn read_data_header(reader: &mut BufReader<File>) -> io::Result<(data_header, [u8; 3])> {
     let mut header_bytes = [0u8; size_of::<data_header>()];
     reader.read_exact(&mut header_bytes)?;
 
-    Ok(data_header {
+    Ok((data_header {
         decodeflags: [header_bytes[0], header_bytes[1]],
         repeatcount: header_bytes[2]
-    })
+    }, header_bytes))
 }
 
 pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<[u16; 48]> {
-    let header = read_data_header(reader)?;
+    let (header, header_bytes) = read_data_header(reader)?;
     if header.repeatcount != 0 {
         return Ok(*prev);
     }
@@ -130,12 +141,13 @@ pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Res
     let mut flag_buffer = [0u8; MAX_FLAG_BYTES];
     reader.read_exact(&mut flag_buffer[0..(num_field_flags * 2 + num_scale_flags)])?;
 
-    let mut offset = 0usize;
-    let field_flags = &flag_buffer[offset..num_field_flags];
-    offset += num_field_flags;
-    let scale_flags = &flag_buffer[offset..offset+num_scale_flags];
-    offset += num_scale_flags;
-    let sign_flags = &flag_buffer[offset..offset+num_field_flags];
+    let mut flag_buf_offset = 0usize;
+    let field_flags = &flag_buffer[flag_buf_offset..num_field_flags];
+    flag_buf_offset += num_field_flags;
+    let scale_flags = &flag_buffer[flag_buf_offset..flag_buf_offset +num_scale_flags];
+    flag_buf_offset += num_scale_flags;
+    let sign_flags = &flag_buffer[flag_buf_offset..flag_buf_offset +num_field_flags];
+    flag_buf_offset += num_field_flags;
 
     let num_fields = field_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
     let mut field_dif_buffer = [0u8; 48]; // num_fields is how much of this buffer is actually used
@@ -173,7 +185,10 @@ pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Res
     }
     let mut checksum = [0u8; 1];
     reader.read_exact(&mut checksum)?;
-    // TODO: validate checksum (not explained in document but is probably just xor)
+    let all_bytes = header_bytes.iter().chain(flag_buffer[..flag_buf_offset].iter()).chain(field_dif_buffer[..num_fields].iter()).chain(scale_dif_buffer[..num_scale].iter());
+    let lmao = all_bytes.map(|x| *x).collect::<Vec<_>>();
+    let sum = calc_checksum(&lmao[..]);
+    assert_eq!(checksum[0], sum);
 
     Ok(out)
 }

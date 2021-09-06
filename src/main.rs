@@ -91,11 +91,12 @@ fn main() {
     println!("{:?}", &header);
     println!("position {}", reader.stream_position().unwrap());
     println!("sizeof flightheader {}", size_of::<flightheader>());
-    reader.seek_relative(1i64).unwrap(); // probably checksum
 
     let init = [0xF0; 48];
-    let res = read_next_data(&init, &mut reader);
-    let data = res.unwrap();
-    let uwu: data_record = unsafe { std::ptr::read(data.as_ptr() as *const _) };
-    println!("{:?}", &uwu);
+    let data1 = read_next_data(&init, &mut reader).unwrap();
+    let data2 = read_next_data(&data1, &mut reader).unwrap();
+    let uwu1: data_record = unsafe { std::ptr::read(data1.as_ptr() as *const _) };
+    let uwu2: data_record = unsafe { std::ptr::read(data2.as_ptr() as *const _) };
+    println!("{:?}", &uwu1);
+    println!("{:?}", &uwu2);
 }
