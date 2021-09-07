@@ -7,6 +7,7 @@ use nom::error::ErrorKind;
 use std::fs::File;
 use std::io::{BufReader, Read, BufRead, Seek};
 use std::mem::size_of;
+use crate::headers::HeaderRecord::*;
 
 
 #[test]
@@ -25,7 +26,7 @@ use std::mem::size_of;
          oil_lo: 75
      };
      assert_eq!(configured_limits_parser("155,130,400,415, 60,1650,220, 75"), Ok(("", config_limit_example)));
-     assert_eq!(parse_record("$A,155,130,400,415, 60,1650,220, 75*70"), Ok(("", HeaderRecord::A(config_limit_example))));
+     assert_eq!(parse_header_record("$A,155,130,400,415, 60,1650,220, 75*70"), Ok(("", HeaderRecord::A(config_limit_example))));
 
      let fuel_flow_example = FuelFlowLimits {
          empty: 0,
@@ -35,7 +36,7 @@ use std::mem::size_of;
          k_factor2: 3183,
      };
      assert_eq!(fuel_flow_parser("0, 49, 22,3183,3183"), Ok(("", fuel_flow_example)));
-     assert_eq!(parse_record("$F,0, 49, 22,3183,3183*57"), Ok(("", HeaderRecord::F(fuel_flow_example))));
+     assert_eq!(parse_header_record("$F,0, 49, 22,3183,3183*57"), Ok(("", HeaderRecord::F(fuel_flow_example))));
 
      let timestamp_example = Timestamp {
          month: 5,
@@ -46,7 +47,7 @@ use std::mem::size_of;
          unknown: 2222,
      };
      assert_eq!(timestamp_parser("5,13, 5,23, 2, 2222"), Ok(("", timestamp_example)));
-     assert_eq!(parse_record("$T, 5,13, 5,23, 2, 2222*65"), Ok(("", HeaderRecord::T(timestamp_example))));
+     assert_eq!(parse_header_record("$T, 5,13, 5,23, 2, 2222*65"), Ok(("", HeaderRecord::T(timestamp_example))));
 
      let config_info_example = ConfigInfo {
          model_number: 700,
@@ -56,20 +57,20 @@ use std::mem::size_of;
          firmware_version: 292,
      };
      assert_eq!(config_info_parser("700,63741, 6193, 1552, 292"), Ok(("", config_info_example)));
-     assert_eq!(parse_record("$C, 700,63741, 6193, 1552, 292*58"), Ok(("", HeaderRecord::C(config_info_example))));
+     assert_eq!(parse_header_record("$C, 700,63741, 6193, 1552, 292*58"), Ok(("", HeaderRecord::C(config_info_example))));
 
      let flight_info_example = FlightInfo {
          flight_number: 227,
          length: 3979,
      };
      assert_eq!(flight_info_parser("227, 3979"), Ok(("", flight_info_example)));
-     assert_eq!(parse_record("$D,  227, 3979*57"), Ok(("", HeaderRecord::D(flight_info_example))));
+     assert_eq!(parse_header_record("$D,  227, 3979*57"), Ok(("", HeaderRecord::D(flight_info_example))));
 
      let last_header_record_example = LastHeaderRecord {
          unknown: 49,
      };
      assert_eq!(last_header_record_parser("49"), Ok(("", last_header_record_example)));
-     assert_eq!(parse_record("$L, 49*4D"), Ok(("", HeaderRecord::L(last_header_record_example))));
+     assert_eq!(parse_header_record("$L, 49*4D"), Ok(("", HeaderRecord::L(last_header_record_example))));
  }
 
 fn main() {
@@ -80,10 +81,27 @@ fn main() {
 
     let f = File::open("U210818.JPI").unwrap();
     let mut reader = BufReader::new(f);
-    for _ in 0..20 {
-        let mut str = String::new();
-        reader.read_line(&mut str);
-        //print!("{}", str);
+
+    let mut header_records = Vec::new();
+
+    for line in reader.by_ref().lines() {
+        let (_, record) = parse_header_record(line.unwrap().as_str()).unwrap();
+        let mut last = false;
+        if let L(_) = record {
+            last = true;
+        }
+        header_records.push(record);
+        if last {
+            break;
+        }
+    }
+
+    let mut first_flight_len = 0usize;
+    for record in header_records {
+        if let D(info) = record {
+            first_flight_len = (info.length * 2) as usize; // convert number of shorts to number of bytes
+            break;
+        }
     }
 
     println!("position {}", reader.stream_position().unwrap());
@@ -93,8 +111,11 @@ fn main() {
     println!("sizeof flightheader {}", size_of::<flightheader>());
 
     let init = [0xF0; 48];
-    let data1 = read_next_data(&init, &mut reader).unwrap();
-    let data2 = read_next_data(&data1, &mut reader).unwrap();
+
+    let mut flight_data = vec![0u8; first_flight_len];
+    reader.read(flight_data.as_mut_slice());
+    let (i, data1) = parse_binary_record(&init, flight_data.as_slice()).unwrap();
+    let (i, data2) = parse_binary_record(&data1, i).unwrap();
     let uwu1: data_record = unsafe { std::ptr::read(data1.as_ptr() as *const _) };
     let uwu2: data_record = unsafe { std::ptr::read(data2.as_ptr() as *const _) };
     println!("{:?}", &uwu1);

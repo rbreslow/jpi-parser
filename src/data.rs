@@ -4,6 +4,9 @@ use std::fs::{File, read};
 use std::mem::size_of;
 use std::error::Error;
 use nom::error::ParseError;
+use nom::IResult;
+use nom::number::complete as num;
+use nom::bytes::complete as bytes;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 #[repr(packed)]
@@ -120,45 +123,41 @@ pub fn read_flight_header(reader: &mut BufReader<File>) -> io::Result<flighthead
     })
 }
 
-fn read_data_header(reader: &mut BufReader<File>) -> io::Result<(data_header, [u8; 3])> {
-    let mut header_bytes = [0u8; size_of::<data_header>()];
-    reader.read_exact(&mut header_bytes)?;
+fn parse_data_header(i: &[u8]) -> IResult<&[u8], data_header> {
+    let (i, decode1) = num::u8(i)?;
+    let (i, decode2) = num::u8(i)?;
+    let (i, repeat) = num::u8(i)?;
+    if decode1 != decode2 {
+        panic!("mismatched decode bytes") // TODO: remove this
+    }
 
-    Ok((data_header {
-        decodeflags: [header_bytes[0], header_bytes[1]],
-        repeatcount: header_bytes[2]
-    }, header_bytes))
+    Ok((i, data_header {
+        decodeflags: [decode1, decode2],
+        repeatcount: repeat
+    }))
 }
 
-pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Result<[u16; 48]> {
-    let (header, header_bytes) = read_data_header(reader)?;
+pub fn parse_binary_record<'a>(prev: &[u16; 48], input: &'a [u8]) -> IResult<&'a [u8], [u16; 48]> {
+
+    let (i, header) = parse_data_header(input)?;
     if header.repeatcount != 0 {
-        return Ok(*prev);
+        return Ok((i, *prev));
     }
-    const MAX_FLAG_BYTES: usize = 14; // 6 + 2 + 6
     let num_field_flags = (header.decodeflags[0] & 0x3F).count_ones() as usize; // never greater than 6
     let num_scale_flags = ((header.decodeflags[0] & 0xC0) >> 6).count_ones() as usize; // never greater than 2
-    let mut flag_buffer = [0u8; MAX_FLAG_BYTES];
-    reader.read_exact(&mut flag_buffer[0..(num_field_flags * 2 + num_scale_flags)])?;
 
-    let mut flag_buf_offset = 0usize;
-    let field_flags = &flag_buffer[flag_buf_offset..num_field_flags];
-    flag_buf_offset += num_field_flags;
-    let scale_flags = &flag_buffer[flag_buf_offset..flag_buf_offset +num_scale_flags];
-    flag_buf_offset += num_scale_flags;
-    let sign_flags = &flag_buffer[flag_buf_offset..flag_buf_offset +num_field_flags];
-    flag_buf_offset += num_field_flags;
+    let (i, field_flags) = bytes::take(num_field_flags)(i)?;
+    let (i, scale_flags) = bytes::take(num_scale_flags)(i)?;
+    let (i, sign_flags) = bytes::take(num_field_flags)(i)?;
 
     let num_fields = field_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
-    let mut field_dif_buffer = [0u8; 48]; // num_fields is how much of this buffer is actually used
-    reader.read_exact( &mut field_dif_buffer[0usize..num_fields])?;
+    let (i, field_dif) = bytes::take(num_fields)(i)?;
 
     let num_scale = scale_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
-    let mut scale_dif_buffer = [0u8; 16];
-    reader.read_exact(&mut scale_dif_buffer[0usize..num_scale])?;
+    let (i, scale_dif) = bytes::take(num_scale)(i)?;
 
     let mut out = *prev;
-    let mut dif_buffer_idx = 0usize; // index to field_dif_buffer and scale_dif_buffer
+    let mut dif_slice_idx = 0usize; // index to field_dif_buffer and scale_dif_buffer
     for i in 0..num_field_flags { // apply field dif
         let mut flag = field_flags[i];
         while flag != 0 {
@@ -166,30 +165,31 @@ pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Res
             let mut diff = 0u16;
             if i < num_scale_flags {
                 if ((scale_flags[i] >> bit) & 1) != 0 {
-                    diff = (scale_dif_buffer[dif_buffer_idx] as u16) << 8; // set high order byte
+                    diff = (scale_dif[dif_slice_idx] as u16) << 8; // set high order byte
                 }
             }
 
             let sign: bool = ((sign_flags[i] >> bit) & 1) != 0;
             let idx = (i * 8) + bit as usize;
-            diff |= field_dif_buffer[dif_buffer_idx] as u16; // set low byte
+            diff |= field_dif[dif_slice_idx] as u16; // set low byte
             if sign {
                 out[idx] = out[idx].overflowing_sub(diff).0; // -
             } else {
                 out[idx] = out[idx].overflowing_add(diff).0; // +
             }
 
-            dif_buffer_idx += 1;
+            dif_slice_idx += 1;
             flag &= !(1 << bit); // zero the bit
         }
     }
-    let mut checksum = [0u8; 1];
-    reader.read_exact(&mut checksum)?;
-    let all_bytes = header_bytes.iter().chain(flag_buffer[..flag_buf_offset].iter()).chain(field_dif_buffer[..num_fields].iter()).chain(scale_dif_buffer[..num_scale].iter());
-    let lmao = all_bytes.map(|x| *x).collect::<Vec<_>>();
-    let calculated = calc_checksum(&lmao[..]);
-    assert_eq!(checksum[0], calculated);
+    let end_ptr = i.as_ptr(); // dont want to include the checksum
+    let (i, checksum) = num::u8(i)?;
+    let begin_ptr = input.as_ptr();
+    let record_size = unsafe { end_ptr.offset_from(begin_ptr) } as usize;
+    let all_bytes = unsafe { std::slice::from_raw_parts(begin_ptr, record_size) };
+    let calculated = calc_checksum(all_bytes);
+    assert_eq!(checksum, calculated);
 
-    Ok(out)
+    Ok((i, out))
 }
 

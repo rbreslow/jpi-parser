@@ -197,7 +197,7 @@ pub fn header_record_parser(line: &str) -> IResult<&str, (char, &str)> {
     Ok((rest, (header_record_type, header_record)))
 }
 
-pub fn parse_record(i: &str) -> IResult<&str, HeaderRecord> {
+pub fn parse_header_record(i: &str) -> IResult<&str, HeaderRecord> {
     let (_, (record_type, data)) = all_consuming(header_record_parser)(i)?;
 
     use HeaderRecord::*;
