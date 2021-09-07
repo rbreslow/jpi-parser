@@ -158,37 +158,37 @@ pub fn read_next_data(prev: &[u16; 48], reader: &mut BufReader<File>) -> io::Res
     reader.read_exact(&mut scale_dif_buffer[0usize..num_scale])?;
 
     let mut out = *prev;
-    let mut dif_buffer_idx = 0usize; // index to field_dif_buffer scale_dif_buffer
+    let mut dif_buffer_idx = 0usize; // index to field_dif_buffer and scale_dif_buffer
     for i in 0..num_field_flags { // apply field dif
-        for bit in 0..8 { // this can be optimized with leading_zeros
-            //let mut flag = field_flags[i];
-            if ((field_flags[i] >> bit) & 1) != 0 {
-                let mut diff = 0u16;
-                if i < num_scale_flags {
-                    if ((scale_flags[i] >> bit) & 1) != 0 {
-                        diff = (scale_dif_buffer[dif_buffer_idx] as u16) << 8; // set high order byte
-                    }
+        let mut flag = field_flags[i];
+        while flag != 0 {
+            let bit = flag.trailing_zeros();
+            let mut diff = 0u16;
+            if i < num_scale_flags {
+                if ((scale_flags[i] >> bit) & 1) != 0 {
+                    diff = (scale_dif_buffer[dif_buffer_idx] as u16) << 8; // set high order byte
                 }
-
-                let sign: bool = ((sign_flags[i] >> bit) & 1) != 0;
-                let idx = (i * 8) + bit;
-                diff |= field_dif_buffer[dif_buffer_idx] as u16; // set low byte
-                if sign {
-                    out[idx] = out[idx].overflowing_sub(diff).0;
-                } else {
-                    out[idx] = out[idx].overflowing_add(diff).0;
-                }
-
-                dif_buffer_idx += 1;
             }
+
+            let sign: bool = ((sign_flags[i] >> bit) & 1) != 0;
+            let idx = (i * 8) + bit as usize;
+            diff |= field_dif_buffer[dif_buffer_idx] as u16; // set low byte
+            if sign {
+                out[idx] = out[idx].overflowing_sub(diff).0; // -
+            } else {
+                out[idx] = out[idx].overflowing_add(diff).0; // +
+            }
+
+            dif_buffer_idx += 1;
+            flag &= !(1 << bit); // zero the bit
         }
     }
     let mut checksum = [0u8; 1];
     reader.read_exact(&mut checksum)?;
     let all_bytes = header_bytes.iter().chain(flag_buffer[..flag_buf_offset].iter()).chain(field_dif_buffer[..num_fields].iter()).chain(scale_dif_buffer[..num_scale].iter());
     let lmao = all_bytes.map(|x| *x).collect::<Vec<_>>();
-    let sum = calc_checksum(&lmao[..]);
-    assert_eq!(checksum[0], sum);
+    let calculated = calc_checksum(&lmao[..]);
+    assert_eq!(checksum[0], calculated);
 
     Ok(out)
 }
