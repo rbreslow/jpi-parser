@@ -109,7 +109,7 @@ fn main() {
     }).unwrap();
 
     println!("position {}", reader.stream_position().unwrap());
-    let header = read_flight_header(&mut reader);
+    let header = read_flight_header(&mut reader).unwrap();
     println!("{:?}", &header);
     println!("position {}", reader.stream_position().unwrap());
     println!("sizeof flightheader {}", size_of::<flightheader>());
@@ -119,8 +119,8 @@ fn main() {
     let mut flight_data = vec![0u8; first_flight_len];
     reader.read(flight_data.as_mut_slice()).unwrap();
     let i = flight_data.as_slice();
-    let (i, data1) = parse_binary_record(&init, i).unwrap();
-    let (i, data2) = parse_binary_record(&data1, i).unwrap();
+    let (i, data1) = parse_binary_record(&init, i, &config, &header).unwrap();
+    let (i, data2) = parse_binary_record(&data1, i, &config, &header).unwrap();
     println!("{:?}", &data1.data);
     println!("{:?}", &data2.data);
 }
