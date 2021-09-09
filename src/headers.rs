@@ -212,3 +212,7 @@ pub fn parse_header_record(i: &str) -> IResult<&str, HeaderRecord> {
         _ => Err(nom::Err::Failure(nom::error::Error::new(i, ErrorKind::NoneOf)))
     }
 }
+
+pub fn num_engines(config: &ConfigInfo) -> u32 {
+    if config.model_number == 760 { 2 } else { 1 }
+}

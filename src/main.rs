@@ -7,7 +7,7 @@ use nom::error::ErrorKind;
 use std::fs::File;
 use std::io::{BufReader, Read, BufRead, Seek};
 use std::mem::size_of;
-use crate::headers::HeaderRecord::*;
+use headers::HeaderRecord::*;
 
 
 #[test]
@@ -97,12 +97,16 @@ fn main() {
     }
 
     let mut first_flight_len = 0usize;
-    for record in header_records {
+    for record in &header_records {
         if let D(info) = record {
             first_flight_len = (info.length * 2) as usize; // convert number of shorts to number of bytes
             break;
         }
     }
+    let config = header_records.iter().find_map(|h| match h {
+        C(cfg) => Some(cfg),
+        _ => None
+    }).unwrap();
 
     println!("position {}", reader.stream_position().unwrap());
     let header = read_flight_header(&mut reader);
@@ -110,14 +114,13 @@ fn main() {
     println!("position {}", reader.stream_position().unwrap());
     println!("sizeof flightheader {}", size_of::<flightheader>());
 
-    let init = [0xF0; 48];
+    let init = binary_record::new(&config);
 
     let mut flight_data = vec![0u8; first_flight_len];
-    reader.read(flight_data.as_mut_slice());
-    let (i, data1) = parse_binary_record(&init, flight_data.as_slice()).unwrap();
+    reader.read(flight_data.as_mut_slice()).unwrap();
+    let i = flight_data.as_slice();
+    let (i, data1) = parse_binary_record(&init, i).unwrap();
     let (i, data2) = parse_binary_record(&data1, i).unwrap();
-    let uwu1: data_record = unsafe { std::ptr::read(data1.as_ptr() as *const _) };
-    let uwu2: data_record = unsafe { std::ptr::read(data2.as_ptr() as *const _) };
-    println!("{:?}", &uwu1);
-    println!("{:?}", &uwu2);
+    println!("{:?}", &data1.data);
+    println!("{:?}", &data2.data);
 }

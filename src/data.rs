@@ -1,4 +1,4 @@
-use std::io::{BufReader, Read, ErrorKind};
+use std::io::{BufReader, Read};
 use std::io;
 use std::fs::{File, read};
 use std::mem::size_of;
@@ -7,6 +7,11 @@ use nom::error::ParseError;
 use nom::IResult;
 use nom::number::complete as num;
 use nom::bytes::complete as bytes;
+
+use crate::headers::ConfigInfo;
+use crate::headers::num_engines;
+use std::ops::Range;
+
 
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 #[repr(packed)]
@@ -61,6 +66,36 @@ pub struct data_record {
     pub unk_6_5: u16,
     pub rusd: u16,
     pub rff: u16
+}
+
+impl data_record {
+    fn as_array(&mut self) -> &mut [u16; 48] {
+        unsafe { std::mem::transmute(self) }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct binary_record {
+    pub data: data_record,
+    pub dif: [u16; 2],
+    pub naflags: [u8; 6]
+}
+
+impl binary_record {
+    pub fn new(config: &ConfigInfo) -> binary_record {
+        let mut data = data_record::default();
+        data.as_array().fill(0xF0);
+        if num_engines(config) == 1 {
+            data.hp_rt1 = 0; // hp = 0
+            data.rpm_highbyte_rcdt = 0; // rpm_highbyte = 0
+        }
+
+        binary_record {
+            data,
+            dif: [0u16; 2],
+            naflags: [0u8; 6] // not available flags
+        }
+    }
 }
 
 // every binary record begins with this and this tells how many flag bytes to read
@@ -137,18 +172,38 @@ fn parse_data_header(i: &[u8]) -> IResult<&[u8], data_header> {
     }))
 }
 
-pub fn parse_binary_record<'a>(prev: &[u16; 48], input: &'a [u8]) -> IResult<&'a [u8], [u16; 48]> {
+fn test_bit(x: u8, bit: u32) -> bool {
+    ((x >> bit) & 1) != 0
+}
 
+fn parse_decode_bits<'a>(i: &'a[u8], out: &mut [u8], decodeflags: u8, bits: Range<u8>) -> IResult<&'a [u8], ()> {
+    let mut i = i;
+    for bit in bits.clone() {
+        if test_bit(decodeflags, bit as u32) {
+            let (j, flags) = num::u8(i)?;
+            i = j;
+            let idx = bit - bits.start;
+            out[idx as usize] = flags;
+        }
+    }
+    Ok((i, ()))
+}
+
+pub fn parse_binary_record<'a>(prev: &binary_record, input: &'a [u8]) -> IResult<&'a [u8], binary_record> {
     let (i, header) = parse_data_header(input)?;
-    if header.repeatcount != 0 {
+    if header.repeatcount != 0 { // TODO: this isn't handled properly
+        if header.repeatcount > 1 {
+            unimplemented!()
+        }
         return Ok((i, *prev));
     }
-    let num_field_flags = (header.decodeflags[0] & 0x3F).count_ones() as usize; // never greater than 6
-    let num_scale_flags = ((header.decodeflags[0] & 0xC0) >> 6).count_ones() as usize; // never greater than 2
+    let mut field_flags = [0u8; 6];
+    let mut scale_flags = [0u8; 2];
+    let mut sign_flags = [0u8; 6];
 
-    let (i, field_flags) = bytes::take(num_field_flags)(i)?;
-    let (i, scale_flags) = bytes::take(num_scale_flags)(i)?;
-    let (i, sign_flags) = bytes::take(num_field_flags)(i)?;
+    let (i, _) = parse_decode_bits(i, &mut field_flags, header.decodeflags[0], 0..6)?;
+    let (i, _) = parse_decode_bits(i, &mut scale_flags, header.decodeflags[0], 6..8)?;
+    let (i, _) = parse_decode_bits(i, &mut sign_flags,  header.decodeflags[0], 0..6)?;
 
     let num_fields = field_flags.iter().map(|x| x.count_ones()).sum::<u32>() as usize;
     let (i, field_dif) = bytes::take(num_fields)(i)?;
@@ -157,25 +212,27 @@ pub fn parse_binary_record<'a>(prev: &[u16; 48], input: &'a [u8]) -> IResult<&'a
     let (i, scale_dif) = bytes::take(num_scale)(i)?;
 
     let mut out = *prev;
-    let mut dif_slice_idx = 0usize; // index to field_dif_buffer and scale_dif_buffer
-    for i in 0..num_field_flags { // apply field dif
+
+    let mut dif_slice_idx = 0usize; // index to field_dif and scale_dif
+    for i in 0..6 { // apply field dif
         let mut flag = field_flags[i];
         while flag != 0 {
             let bit = flag.trailing_zeros();
             let mut diff = 0u16;
-            if i < num_scale_flags {
-                if ((scale_flags[i] >> bit) & 1) != 0 {
+            if i < 2 {
+                if test_bit(scale_flags[i], bit) {
                     diff = (scale_dif[dif_slice_idx] as u16) << 8; // set high order byte
                 }
             }
 
-            let sign: bool = ((sign_flags[i] >> bit) & 1) != 0;
+            let sign: bool = test_bit(sign_flags[i], bit);
             let idx = (i * 8) + bit as usize;
             diff |= field_dif[dif_slice_idx] as u16; // set low byte
+            let array = out.data.as_array();
             if sign {
-                out[idx] = out[idx].overflowing_sub(diff).0; // -
+                array[idx] = array[idx].overflowing_sub(diff).0; // -
             } else {
-                out[idx] = out[idx].overflowing_add(diff).0; // +
+                array[idx] = array[idx].overflowing_add(diff).0; // +
             }
 
             dif_slice_idx += 1;
