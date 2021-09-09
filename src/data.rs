@@ -8,8 +8,7 @@ use nom::IResult;
 use nom::number::complete as num;
 use nom::bytes::complete as bytes;
 
-use crate::headers::ConfigInfo;
-use crate::headers::num_engines;
+use crate::headers::{ConfigInfo, num_cyls, num_engines};
 use std::ops::Range;
 use std::cmp::{min, max};
 
@@ -26,7 +25,6 @@ pub struct flightheader {
 }
 
 
-// TODO: work with more than 6 cylinders
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct data_record {
     // first byte of flags
@@ -108,7 +106,7 @@ impl binary_record {
 
     // im just pasting the reference impl lol
     pub fn calcstuff(&mut self, config: &ConfigInfo, header: &flightheader) {
-        let cyls = 6;
+        let cyls = num_cyls(header.flags);
         let engines = num_engines(config);
         assert!(cyls <= 6 || engines == 1);
 

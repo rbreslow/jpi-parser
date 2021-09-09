@@ -216,3 +216,8 @@ pub fn parse_header_record(i: &str) -> IResult<&str, HeaderRecord> {
 pub fn num_engines(config: &ConfigInfo) -> u32 {
     if config.model_number == 760 { 2 } else { 1 }
 }
+
+pub fn num_cyls(flags: u32) -> u32 {
+    let mask = 0b11111111100;
+    ((flags & mask) >> 2).trailing_ones()
+}
